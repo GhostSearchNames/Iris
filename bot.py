@@ -2,21 +2,15 @@ import asyncio
 import logging
 import random
 import sqlite3
-import os
-import time
-import re
-import json
-import hashlib
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from aiogram.enums import ParseMode
-from aiogram.exceptions import TelegramBadRequest
 
-# ==================================================
+# ========================================
 # 1️⃣ НАСТРОЙКИ
-# ==================================================
+# ========================================
 
 BOT_TOKEN = "1780244667:ZRL7qnnHfc1iaIonCOZPsnN3dBIwbfeaBgn"
 
@@ -26,9 +20,9 @@ logger = logging.getLogger(__name__)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# ==================================================
-# 2️⃣ БАЗА ДАННЫХ (РАСШИРЕННАЯ)
-# ==================================================
+# ========================================
+# 2️⃣ БАЗА ДАННЫХ
+# ========================================
 
 class Database:
     def __init__(self):
@@ -37,7 +31,6 @@ class Database:
         self.create_tables()
 
     def create_tables(self):
-        # Пользователи
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
@@ -47,35 +40,22 @@ class Database:
                 register_date TEXT DEFAULT CURRENT_TIMESTAMP,
                 last_daily TEXT,
                 referral_code TEXT UNIQUE,
-                referred_by INTEGER DEFAULT 0,
                 referral_count INTEGER DEFAULT 0,
                 total_earned INTEGER DEFAULT 0,
-                total_spent INTEGER DEFAULT 0,
                 support_count INTEGER DEFAULT 0,
-                win_streak INTEGER DEFAULT 0,
-                max_win_streak INTEGER DEFAULT 0,
-                level INTEGER DEFAULT 0,
-                exp INTEGER DEFAULT 0,
-                total_messages INTEGER DEFAULT 0,
-                last_message_date TEXT,
-                is_banned INTEGER DEFAULT 0,
-                clan_id INTEGER DEFAULT 0,
-                clan_role TEXT DEFAULT 'member'
+                is_banned INTEGER DEFAULT 0
             )
         """)
         
-        # Администраторы
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS admins (
                 user_id INTEGER PRIMARY KEY,
                 rank INTEGER DEFAULT 1,
                 nickname TEXT,
-                added_by INTEGER,
-                added_date TEXT DEFAULT CURRENT_TIMESTAMP
+                added_by INTEGER
             )
         """)
         
-        # Муты
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS mutes (
                 user_id INTEGER,
@@ -85,18 +65,15 @@ class Database:
             )
         """)
         
-        # Баны
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS bans (
                 user_id INTEGER PRIMARY KEY,
                 chat_id INTEGER,
                 banned_by INTEGER,
-                reason TEXT,
-                date TEXT DEFAULT CURRENT_TIMESTAMP
+                reason TEXT
             )
         """)
         
-        # Варны
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS warns (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -108,81 +85,16 @@ class Database:
             )
         """)
         
-        # Транзакции
-        self.cursor.execute("""
-            CREATE TABLE IF NOT EXISTS transactions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                type TEXT,
-                amount INTEGER,
-                description TEXT,
-                timestamp TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        
-        # Рефералы
-        self.cursor.execute("""
-            CREATE TABLE IF NOT EXISTS referrals (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                referrer_id INTEGER,
-                referred_id INTEGER,
-                bonus_paid INTEGER DEFAULT 0,
-                timestamp TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        
-        # Сообщения для топа
-        self.cursor.execute("""
-            CREATE TABLE IF NOT EXISTS messages_stats (
-                user_id INTEGER,
-                date TEXT,
-                count INTEGER DEFAULT 0,
-                PRIMARY KEY (user_id, date)
-            )
-        """)
-        
-        # Кланы
-        self.cursor.execute("""
-            CREATE TABLE IF NOT EXISTS clans (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT UNIQUE,
-                owner_id INTEGER,
-                members TEXT,
-                created_date TEXT DEFAULT CURRENT_TIMESTAMP,
-                balance INTEGER DEFAULT 0,
-                level INTEGER DEFAULT 1,
-                exp INTEGER DEFAULT 0
-            )
-        """)
-        
-        # Магазин
-        self.cursor.execute("""
-            CREATE TABLE IF NOT EXISTS shop (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT,
-                price INTEGER,
-                description TEXT,
-                type TEXT,
-                amount INTEGER
-            )
-        """)
-        
         self.conn.commit()
-        logger.info("✅ База данных создана/обновлена")
 
-    def register_user(self, user_id, referrer_id=None):
+    def register_user(self, user_id):
         if not self.get_user(user_id):
-            referral_code = hashlib.md5(str(user_id).encode()).hexdigest()[:8]
+            import hashlib
+            code = hashlib.md5(str(user_id).encode()).hexdigest()[:8]
             self.cursor.execute("""
-                INSERT INTO users (user_id, referral_code) 
-                VALUES (?, ?)
-            """, (user_id, referral_code))
+                INSERT INTO users (user_id, referral_code) VALUES (?, ?)
+            """, (user_id, code))
             self.conn.commit()
-            
-            if referrer_id and referrer_id != user_id:
-                self.add_referral(referrer_id, user_id)
-            return True
-        return False
 
     def get_user(self, user_id):
         self.cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
@@ -195,7 +107,6 @@ class Database:
     def update_balance(self, user_id, amount):
         self.cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
         self.conn.commit()
-        self.add_transaction(user_id, "balance_change", amount, f"Изменение баланса на {amount}")
 
     def get_users(self):
         self.cursor.execute("SELECT user_id FROM users WHERE is_banned = 0")
@@ -203,72 +114,33 @@ class Database:
 
     def get_top_players(self, limit=10):
         self.cursor.execute("""
-            SELECT user_id, balance, wins, losses, total_earned
-            FROM users
-            WHERE is_banned = 0
-            ORDER BY balance DESC
-            LIMIT ?
+            SELECT user_id, balance, wins, losses
+            FROM users WHERE is_banned = 0
+            ORDER BY balance DESC LIMIT ?
         """, (limit,))
-        return self.cursor.fetchall()
-
-    def get_top_day(self, limit=10):
-        today = datetime.now().strftime('%Y-%m-%d')
-        self.cursor.execute("""
-            SELECT user_id, count FROM messages_stats
-            WHERE date = ?
-            ORDER BY count DESC
-            LIMIT ?
-        """, (today, limit))
-        return self.cursor.fetchall()
-
-    def get_top_week(self, limit=10):
-        week = datetime.now().strftime('%Y-W%W')
-        self.cursor.execute("""
-            SELECT user_id, SUM(count) as total FROM messages_stats
-            WHERE strftime('%Y-W%W', date) = ?
-            GROUP BY user_id
-            ORDER BY total DESC
-            LIMIT ?
-        """, (week, limit))
         return self.cursor.fetchall()
 
     def get_referral_code(self, user_id):
         user = self.get_user(user_id)
         return user[6] if user else None
 
-    def get_referral_count(self, user_id):
-        user = self.get_user(user_id)
-        return user[8] if user else 0
-
     def add_referral(self, referrer_id, referred_id):
         self.cursor.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id = ?", (referrer_id,))
         count = self.cursor.fetchone()[0]
-        
         if count < 10:
-            self.cursor.execute("""
-                INSERT INTO referrals (referrer_id, referred_id, bonus_paid)
-                VALUES (?, ?, 1)
-            """, (referrer_id, referred_id))
             self.update_balance(referrer_id, 50)
             self.cursor.execute("""
-                UPDATE users SET referral_count = referral_count + 1 
+                UPDATE users SET referral_count = referral_count + 1
                 WHERE user_id = ?
             """, (referrer_id,))
             self.conn.commit()
 
-    def add_transaction(self, user_id, type, amount, description):
-        self.cursor.execute("""
-            INSERT INTO transactions (user_id, type, amount, description)
-            VALUES (?, ?, ?, ?)
-        """, (user_id, type, amount, description))
-        self.conn.commit()
-
     def get_daily_bonus(self, user_id):
         user = self.get_user(user_id)
         if user:
-            last_bonus = user[5]
-            if last_bonus:
-                last_date = datetime.strptime(last_bonus, '%Y-%m-%d %H:%M:%S')
+            last = user[5]
+            if last:
+                last_date = datetime.strptime(last, '%Y-%m-%d %H:%M:%S')
                 if (datetime.now() - last_date).days >= 1:
                     return True
             else:
@@ -277,23 +149,6 @@ class Database:
 
     def set_daily_bonus(self, user_id):
         self.cursor.execute("UPDATE users SET last_daily = CURRENT_TIMESTAMP WHERE user_id = ?", (user_id,))
-        self.conn.commit()
-
-    def update_message_count(self, user_id):
-        today = datetime.now().strftime('%Y-%m-%d')
-        self.cursor.execute("""
-            INSERT INTO messages_stats (user_id, date, count)
-            VALUES (?, ?, 1)
-            ON CONFLICT(user_id, date) DO UPDATE SET count = count + 1
-        """, (user_id, today))
-        self.conn.commit()
-        
-        self.cursor.execute("""
-            UPDATE users SET 
-                total_messages = total_messages + 1,
-                last_message_date = CURRENT_TIMESTAMP
-            WHERE user_id = ?
-        """, (user_id,))
         self.conn.commit()
 
     def is_admin(self, user_id):
@@ -305,16 +160,15 @@ class Database:
         result = self.cursor.fetchone()
         return result[0] if result else 0
 
-    def get_admin_nickname(self, user_id):
-        self.cursor.execute("SELECT nickname FROM admins WHERE user_id = ?", (user_id,))
-        result = self.cursor.fetchone()
-        return result[0] if result else None
+    def get_all_admins(self):
+        self.cursor.execute("SELECT user_id, rank, nickname FROM admins ORDER BY rank DESC")
+        return self.cursor.fetchall()
 
-    def add_admin(self, user_id, rank=1, nickname=None, added_by=None):
+    def add_admin(self, user_id, rank=1, nickname=None):
         self.cursor.execute("""
-            INSERT OR REPLACE INTO admins (user_id, rank, nickname, added_by)
-            VALUES (?, ?, ?, ?)
-        """, (user_id, rank, nickname, added_by))
+            INSERT OR REPLACE INTO admins (user_id, rank, nickname)
+            VALUES (?, ?, ?)
+        """, (user_id, rank, nickname))
         self.conn.commit()
 
     def remove_admin(self, user_id):
@@ -324,18 +178,6 @@ class Database:
     def set_admin_rank(self, user_id, rank):
         self.cursor.execute("UPDATE admins SET rank = ? WHERE user_id = ?", (rank, user_id))
         self.conn.commit()
-
-    def get_all_admins(self):
-        self.cursor.execute("""
-            SELECT user_id, rank, nickname, added_date
-            FROM admins
-            ORDER BY rank DESC, added_date ASC
-        """)
-        return self.cursor.fetchall()
-
-    def get_admin_count(self):
-        self.cursor.execute("SELECT COUNT(*) FROM admins")
-        return self.cursor.fetchone()[0]
 
     def mute_user(self, user_id, chat_id, until):
         self.cursor.execute("""
@@ -391,49 +233,11 @@ class Database:
         self.cursor.execute("DELETE FROM warns WHERE user_id = ?", (user_id,))
         self.conn.commit()
 
-    def create_clan(self, name, owner_id):
-        self.cursor.execute("""
-            INSERT INTO clans (name, owner_id, members)
-            VALUES (?, ?, ?)
-        """, (name, owner_id, str(owner_id)))
-        self.conn.commit()
-        return self.cursor.lastrowid
-
-    def get_clan(self, clan_id):
-        self.cursor.execute("SELECT * FROM clans WHERE id = ?", (clan_id,))
-        return self.cursor.fetchone()
-
-    def get_clan_by_name(self, name):
-        self.cursor.execute("SELECT * FROM clans WHERE name = ?", (name,))
-        return self.cursor.fetchone()
-
-    def add_clan_member(self, clan_id, user_id):
-        clan = self.get_clan(clan_id)
-        if clan:
-            members = clan[3].split(',') if clan[3] else []
-            if str(user_id) not in members:
-                members.append(str(user_id))
-                self.cursor.execute("UPDATE clans SET members = ? WHERE id = ?", (','.join(members), clan_id))
-                self.conn.commit()
-                return True
-        return False
-
-    def remove_clan_member(self, clan_id, user_id):
-        clan = self.get_clan(clan_id)
-        if clan:
-            members = clan[3].split(',') if clan[3] else []
-            if str(user_id) in members:
-                members.remove(str(user_id))
-                self.cursor.execute("UPDATE clans SET members = ? WHERE id = ?", (','.join(members), clan_id))
-                self.conn.commit()
-                return True
-        return False
-
 db = Database()
 
-# ==================================================
+# ========================================
 # 3️⃣ КОНСТАНТЫ
-# ==================================================
+# ========================================
 
 RANK_NAMES = {
     1: "🟢 Модератор",
@@ -443,29 +247,12 @@ RANK_NAMES = {
     5: "🔴 Главный администратор"
 }
 
-RANK_COMMANDS = {
-    1: ["!мут", "!кик", "!очистить"],
-    2: ["!мут", "!кик", "!очистить", "!бан", "!варн"],
-    3: ["!мут", "!кик", "!очистить", "!бан", "!варн", "!разбан", "!снятьварн"],
-    4: ["!мут", "!кик", "!очистить", "!бан", "!варн", "!разбан", "!снятьварн", "!добавить", "!удалить"],
-    5: ["ВСЁ"]
-}
-
 def get_rank_name(rank):
     return RANK_NAMES.get(rank, "❓ Неизвестно")
 
-def can_use_command(user_id, command):
-    rank = db.get_admin_rank(user_id)
-    if rank == 0:
-        return False
-    if rank == 5:
-        return True
-    allowed = RANK_COMMANDS.get(rank, [])
-    return command in allowed or "ВСЁ" in allowed
-
-# ==================================================
+# ========================================
 # 4️⃣ КЛАВИАТУРЫ
-# ==================================================
+# ========================================
 
 def main_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -487,145 +274,132 @@ def games_menu():
         [InlineKeyboardButton("🔙 Назад", callback_data="back")]
     ])
 
-# ==================================================
-# 5️⃣ КОМАНДЫ (START, BALANCE, BONUS, HELP, TOP, ADMINS, GAMES)
-# ==================================================
+# ========================================
+# 5️⃣ КОМАНДЫ
+# ========================================
 
 @dp.message(Command("start"))
-async def start_command(message: Message):
+async def start_cmd(message: Message):
     user_id = message.from_user.id
     
+    # Проверка реферала
     referrer_id = None
     if " " in message.text:
         parts = message.text.split()
         if len(parts) > 1:
-            ref_code = parts[1]
-            db.cursor.execute("SELECT user_id FROM users WHERE referral_code = ?", (ref_code,))
+            code = parts[1]
+            db.cursor.execute("SELECT user_id FROM users WHERE referral_code = ?", (code,))
             result = db.cursor.fetchone()
             if result:
                 referrer_id = result[0]
     
-    db.register_user(user_id, referrer_id)
+    db.register_user(user_id)
+    if referrer_id:
+        db.add_referral(referrer_id, user_id)
     
-    text = f"""
-🌸 **IRIS BOT** 🌸
-
-Привет, {message.from_user.first_name}!
-
-🎮 **/games** — список игр
-💰 **/balance** — баланс
-👑 **/admins** — список админов
-📊 **/top** — топ игроков
-🎁 **/bonus** — ежедневный бонус
-📖 **/help** — помощь
-
-🔥 **Удачи!**
-    """
-    
-    await message.answer(text, parse_mode=ParseMode.MARKDOWN, reply_markup=main_menu())
+    await message.answer(
+        f"🌸 **IRIS BOT**\n\n"
+        f"Привет, {message.from_user.first_name}!\n"
+        f"💰 Баланс: {db.get_balance(user_id)} 💎\n\n"
+        f"🎮 /games — список игр\n"
+        f"💰 /balance — баланс\n"
+        f"👑 /admins — админы\n"
+        f"📊 /top — топ игроков\n"
+        f"🎁 /bonus — бонус\n"
+        f"📖 /help — помощь",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=main_menu()
+    )
 
 @dp.message(Command("games"))
-async def games_command(message: Message):
+async def games_cmd(message: Message):
     await message.answer("🎮 **ВЫБЕРИ ИГРУ:**", parse_mode=ParseMode.MARKDOWN, reply_markup=games_menu())
 
 @dp.message(Command("balance"))
-async def balance_command(message: Message):
-    user_id = message.from_user.id
-    balance = db.get_balance(user_id)
-    await message.answer(f"💰 **Твой баланс:** {balance} 💎")
+async def balance_cmd(message: Message):
+    await message.answer(f"💰 **Баланс:** {db.get_balance(message.from_user.id)} 💎")
 
 @dp.message(Command("bonus"))
-async def bonus_command(message: Message):
+async def bonus_cmd(message: Message):
     user_id = message.from_user.id
-    
     if db.get_daily_bonus(user_id):
         db.update_balance(user_id, 100)
         db.set_daily_bonus(user_id)
-        balance = db.get_balance(user_id)
-        await message.answer(f"🎁 **БОНУС ПОЛУЧЕН!**\n+100 💎\n💰 Баланс: {balance} 💎")
+        await message.answer(f"🎁 **+100 💎**\n💰 Баланс: {db.get_balance(user_id)}")
     else:
-        await message.answer("❌ Ты уже получил бонус сегодня!\nПриходи завтра! 🔥")
-
-@dp.message(Command("help"))
-async def help_command(message: Message):
-    text = """
-📖 **ПОМОЩЬ ПО IRIS** 🌸
-
-🎮 **ИГРЫ:**
-!рулетка [ставка] — русская рулетка (х2)
-!кости [ставка] — бросок костей (х2)
-!битва @user [ставка] — PvP битва
-!кто гей — случайный выбор 🏳️‍🌈
-!кто — случайный человек
-!угадай [число] — угадай число (1-10)
-
-💕 **РП:**
-!обнять @user
-!поцеловать @user
-!дать пять @user
-!погладить @user
-!укусить @user
-
-💰 **ЭКОНОМИКА:**
-/balance — баланс
-/bonus — ежедневный бонус
-/top — топ игроков
-
-👑 **АДМИНЫ:**
-!админы — список админов
-!мут @user [время] — замутить
-!бан @user — забанить
-!кик @user — кикнуть
-
-🔥 **УДАЧИ!**
-    """
-    await message.answer(text, parse_mode=ParseMode.MARKDOWN)
+        await message.answer("❌ Бонус уже получен сегодня!")
 
 @dp.message(Command("top"))
-async def top_command(message: Message):
+async def top_cmd(message: Message):
     top = db.get_top_players(10)
     if not top:
         await message.answer("Пока нет игроков 😔")
         return
-    
     text = "🏆 **ТОП ИГРОКОВ:**\n\n"
-    for i, (user_id, balance, wins, losses, earned) in enumerate(top, 1):
+    for i, (uid, balance, wins, losses) in enumerate(top, 1):
         try:
-            user = await bot.get_chat(user_id)
-            name = user.first_name or str(user_id)
+            user = await bot.get_chat(uid)
+            name = user.first_name or str(uid)
         except:
-            name = str(user_id)
-        
+            name = str(uid)
         text += f"{i}. {name} — {balance} 💎 (🏆{wins} ❌{losses})\n"
-    
     await message.answer(text, parse_mode=ParseMode.MARKDOWN)
 
 @dp.message(Command("admins"))
-async def admins_command(message: Message):
+async def admins_cmd(message: Message):
     admins = db.get_all_admins()
     if not admins:
-        await message.answer("👑 В стаффе пока никого нет!")
+        await message.answer("👑 Админов пока нет!")
         return
-    
     text = "👑 **АДМИНИСТРАТОРЫ:**\n\n"
-    for admin_id, rank, nickname, date in admins:
+    for uid, rank, nickname in admins:
         try:
-            user = await bot.get_chat(admin_id)
-            name = user.first_name or str(admin_id)
+            user = await bot.get_chat(uid)
+            name = user.first_name or str(uid)
             if user.username:
                 name += f" (@{user.username})"
         except:
-            name = str(admin_id)
-        
+            name = str(uid)
         rank_name = get_rank_name(rank)
         nick = f" [{nickname}]" if nickname else ""
         text += f"{rank_name} — {name}{nick}\n"
-    
     await message.answer(text, parse_mode=ParseMode.MARKDOWN)
 
-# ==================================================
+@dp.message(Command("help"))
+async def help_cmd(message: Message):
+    await message.answer(
+        "📖 **ПОМОЩЬ**\n\n"
+        "🎮 **ИГРЫ:**\n"
+        "!рулетка [ставка]\n"
+        "!кости [ставка]\n"
+        "!битва @user [ставка]\n"
+        "!кто гей\n"
+        "!кто\n"
+        "!угадай [число]\n\n"
+        "💕 **РП:**\n"
+        "!обнять @user\n"
+        "!поцеловать @user\n"
+        "!дать пять @user\n"
+        "!погладить @user\n"
+        "!укусить @user\n\n"
+        "💰 **ЭКОНОМИКА:**\n"
+        "/balance\n"
+        "/bonus\n"
+        "/top\n\n"
+        "👑 **АДМИНЫ:**\n"
+        "!админы\n"
+        "!мут @user [время]\n"
+        "!бан @user\n"
+        "!кик @user\n"
+        "!варн @user [причина]\n"
+        "!добавить @user [ранг]\n"
+        "!удалить @user",
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+# ========================================
 # 6️⃣ ИГРЫ
-# ==================================================
+# ========================================
 
 @dp.message()
 async def handle_messages(message: Message):
@@ -645,179 +419,122 @@ async def handle_messages(message: Message):
         return
     
     db.register_user(user_id)
-    db.update_message_count(user_id)
     
-    # ==========================================
-    # РУЛЕТКА
-    # ==========================================
+    # ===== РУЛЕТКА =====
     if text.startswith("!рулетка"):
         parts = text.split()
         if len(parts) < 2:
-            await message.answer("❌ Укажи ставку! Пример: !рулетка 50")
+            await message.answer("❌ Укажи ставку! !рулетка 50")
             return
-        
         try:
             bet = int(parts[1])
         except:
             await message.answer("❌ Введи число!")
             return
-        
         if bet < 1:
-            await message.answer("❌ Ставка должна быть больше 0!")
+            await message.answer("❌ Ставка должна быть > 0!")
             return
-        
-        balance = db.get_balance(user_id)
-        if balance < bet:
-            await message.answer(f"❌ Недостаточно средств! У тебя {balance} 💎")
+        if db.get_balance(user_id) < bet:
+            await message.answer(f"❌ Не хватает! У тебя {db.get_balance(user_id)} 💎")
             return
-        
-        msg = await message.answer("🔄 Крутим рулетку...")
-        await asyncio.sleep(0.5)
-        
-        win = random.random() < 0.5
-        if win:
+        if random.random() < 0.5:
             db.update_balance(user_id, bet)
-            db.cursor.execute("UPDATE users SET wins = wins + 1 WHERE user_id = ?", (user_id,))
-            db.conn.commit()
-            await msg.edit_text(f"🎉 **ТЫ ВЫИГРАЛ!**\n💰 +{bet} 💎\n💎 Баланс: {db.get_balance(user_id)}")
+            await message.answer(f"🎉 ВЫИГРАЛ! +{bet} 💎\n💰 Баланс: {db.get_balance(user_id)}")
         else:
             db.update_balance(user_id, -bet)
-            db.cursor.execute("UPDATE users SET losses = losses + 1 WHERE user_id = ?", (user_id,))
-            db.conn.commit()
-            await msg.edit_text(f"💀 **ТЫ ПРОИГРАЛ!**\n💸 -{bet} 💎\n💎 Баланс: {db.get_balance(user_id)}")
+            await message.answer(f"💀 ПРОИГРАЛ! -{bet} 💎\n💰 Баланс: {db.get_balance(user_id)}")
         return
     
-    # ==========================================
-    # КОСТИ
-    # ==========================================
+    # ===== КОСТИ =====
     if text.startswith("!кости"):
         parts = text.split()
         if len(parts) < 2:
-            await message.answer("❌ Укажи ставку! Пример: !кости 50")
+            await message.answer("❌ Укажи ставку! !кости 50")
             return
-        
         try:
             bet = int(parts[1])
         except:
             await message.answer("❌ Введи число!")
             return
-        
-        balance = db.get_balance(user_id)
-        if balance < bet:
-            await message.answer(f"❌ Недостаточно средств! У тебя {balance} 💎")
+        if db.get_balance(user_id) < bet:
+            await message.answer(f"❌ Не хватает! У тебя {db.get_balance(user_id)} 💎")
             return
-        
-        msg = await message.answer("🎲 Бросаем кости...")
-        await asyncio.sleep(0.5)
-        
         dice = random.randint(1, 6)
-        win = dice >= 4
-        
-        if win:
+        if dice >= 4:
             db.update_balance(user_id, bet)
-            db.cursor.execute("UPDATE users SET wins = wins + 1 WHERE user_id = ?", (user_id,))
-            db.conn.commit()
-            await msg.edit_text(f"🎲 **ВЫПАЛО: {dice}**\n🎉 **ТЫ ВЫИГРАЛ!**\n💰 +{bet} 💎")
+            await message.answer(f"🎲 ВЫПАЛО: {dice} 🎉 ВЫИГРАЛ! +{bet} 💎")
         else:
             db.update_balance(user_id, -bet)
-            db.cursor.execute("UPDATE users SET losses = losses + 1 WHERE user_id = ?", (user_id,))
-            db.conn.commit()
-            await msg.edit_text(f"🎲 **ВЫПАЛО: {dice}**\n💀 **ТЫ ПРОИГРАЛ!**\n💸 -{bet} 💎")
+            await message.answer(f"🎲 ВЫПАЛО: {dice} 💀 ПРОИГРАЛ! -{bet} 💎")
         return
     
-    # ==========================================
-    # УГАДАЙ
-    # ==========================================
+    # ===== УГАДАЙ =====
     if text.startswith("!угадай"):
         parts = text.split()
         if len(parts) < 2:
-            await message.answer("❌ Угадай число от 1 до 10! Пример: !угадай 5")
+            await message.answer("❌ Угадай число от 1 до 10! !угадай 5")
             return
-        
         try:
             guess = int(parts[1])
         except:
             await message.answer("❌ Введи число!")
             return
-        
         if guess < 1 or guess > 10:
-            await message.answer("❌ Число должно быть от 1 до 10!")
+            await message.answer("❌ Число от 1 до 10!")
             return
-        
         target = random.randint(1, 10)
         if guess == target:
-            winnings = 50
-            db.update_balance(user_id, winnings)
-            db.cursor.execute("UPDATE users SET wins = wins + 1 WHERE user_id = ?", (user_id,))
-            db.conn.commit()
-            await message.answer(f"🎉 **ПРАВИЛЬНО!** Было загадано {target}!\n💰 +{winnings} 💎")
+            db.update_balance(user_id, 50)
+            await message.answer(f"🎉 ПРАВИЛЬНО! Было {target}! +50 💎")
         else:
-            db.cursor.execute("UPDATE users SET losses = losses + 1 WHERE user_id = ?", (user_id,))
-            db.conn.commit()
-            await message.answer(f"❌ **НЕ УГАДАЛ!** Было загадано {target}!")
+            await message.answer(f"❌ НЕ УГАДАЛ! Было {target}!")
         return
     
-    # ==========================================
-    # КТО ГЕЙ
-    # ==========================================
-    if text.startswith("!кто гей"):
+    # ===== КТО ГЕЙ =====
+    if text == "!кто гей":
         users = db.get_users()
         if not users:
-            await message.answer("😅 В чате пока никого нет!")
+            await message.answer("😅 В чате никого нет!")
             return
-        
         target = random.choice(users)
         try:
             user = await bot.get_chat(target)
             name = user.first_name or str(target)
-            await message.answer(f"🏳️‍🌈 **СЕГОДНЯШНИЙ ГЕЙ:** {name}!")
         except:
-            await message.answer(f"🏳️‍🌈 **СЕГОДНЯШНИЙ ГЕЙ:** {target}!")
+            name = str(target)
+        await message.answer(f"🏳️‍🌈 СЕГОДНЯШНИЙ ГЕЙ: {name}!")
         return
     
-    # ==========================================
-    # КТО
-    # ==========================================
-    if text.startswith("!кто") and not text.startswith("!кто гей"):
+    # ===== КТО =====
+    if text == "!кто":
         users = db.get_users()
         if not users:
-            await message.answer("😅 В чате пока никого нет!")
+            await message.answer("😅 В чате никого нет!")
             return
-        
         target = random.choice(users)
         try:
             user = await bot.get_chat(target)
             name = user.first_name or str(target)
-            await message.answer(f"🎯 **СЛУЧАЙНЫЙ ВЫБОР:** {name}!")
         except:
-            await message.answer(f"🎯 **СЛУЧАЙНЫЙ ВЫБОР:** {target}!")
+            name = str(target)
+        await message.answer(f"🎯 СЛУЧАЙНЫЙ ВЫБОР: {name}!")
         return
     
-    # ==========================================
-    # БИТВА
-    # ==========================================
+    # ===== БИТВА =====
     if text.startswith("!битва"):
         parts = text.split()
         if len(parts) < 3:
-            await message.answer("❌ Пример: !битва @user 50")
+            await message.answer("❌ !битва @user 50")
             return
-        
         target_username = parts[1]
         try:
             bet = int(parts[2])
         except:
             await message.answer("❌ Введи число!")
             return
-        
-        if bet < 1:
-            await message.answer("❌ Ставка должна быть больше 0!")
+        if db.get_balance(user_id) < bet:
+            await message.answer(f"❌ Не хватает! У тебя {db.get_balance(user_id)} 💎")
             return
-        
-        balance = db.get_balance(user_id)
-        if balance < bet:
-            await message.answer(f"❌ Недостаточно средств! У тебя {balance} 💎")
-            return
-        
         target_id = None
         for uid in db.get_users():
             try:
@@ -827,44 +544,28 @@ async def handle_messages(message: Message):
                     break
             except:
                 pass
-        
         if not target_id:
             await message.answer("❌ Пользователь не найден!")
             return
-        
         if target_id == user_id:
-            await message.answer("❌ Нельзя биться с самим собой!")
+            await message.answer("❌ Нельзя биться с собой!")
             return
-        
-        target_balance = db.get_balance(target_id)
-        if target_balance < bet:
-            await message.answer("❌ У противника недостаточно средств!")
+        if db.get_balance(target_id) < bet:
+            await message.answer("❌ У противника не хватает средств!")
             return
-        
-        msg = await message.answer("⚔️ Начинаем битву...")
-        await asyncio.sleep(0.5)
-        
         winner = random.choice([user_id, target_id])
         if winner == user_id:
             db.update_balance(user_id, bet)
             db.update_balance(target_id, -bet)
-            db.cursor.execute("UPDATE users SET wins = wins + 1 WHERE user_id = ?", (user_id,))
-            db.cursor.execute("UPDATE users SET losses = losses + 1 WHERE user_id = ?", (target_id,))
-            db.conn.commit()
-            await msg.edit_text(f"⚔️ **{message.from_user.first_name} ПОБЕДИЛ!**\n💰 +{bet} 💎")
+            await message.answer(f"⚔️ {message.from_user.first_name} ПОБЕДИЛ! +{bet} 💎")
         else:
             db.update_balance(user_id, -bet)
             db.update_balance(target_id, bet)
-            db.cursor.execute("UPDATE users SET losses = losses + 1 WHERE user_id = ?", (user_id,))
-            db.cursor.execute("UPDATE users SET wins = wins + 1 WHERE user_id = ?", (target_id,))
-            db.conn.commit()
-            await msg.edit_text(f"⚔️ **{target_username} ПОБЕДИЛ!**\n💸 -{bet} 💎")
+            await message.answer(f"⚔️ {target_username} ПОБЕДИЛ! -{bet} 💎")
         return
     
-    # ==========================================
-    # РП КОМАНДЫ
-    # ==========================================
-    rp_commands = {
+    # ===== РП КОМАНДЫ =====
+    rp = {
         "!обнять": "🤗 обнял(а)",
         "!поцеловать": "💋 поцеловал(а)",
         "!дать пять": "✋ дал(а) пять",
@@ -873,55 +574,47 @@ async def handle_messages(message: Message):
         "!кинуть": "💪 кинул(а)"
     }
     
-    for cmd, action in rp_commands.items():
+    for cmd, action in rp.items():
         if text.startswith(cmd):
             target = text.replace(cmd, "").strip()
             if not target:
-                await message.answer(f"❌ Кого? Напиши: {cmd} @user")
+                await message.answer(f"❌ Кого? {cmd} @user")
                 return
             await message.answer(f"💕 {message.from_user.first_name} {action} {target}! ❤️")
             return
     
-    # ==========================================
-    # АДМИН КОМАНДЫ
-    # ==========================================
+    # ===== АДМИН КОМАНДЫ =====
     
-    if text.startswith("!админы") or text.startswith("!стафф"):
+    if text == "!админы" or text == "!стафф":
         admins = db.get_all_admins()
         if not admins:
-            await message.answer("👑 В стаффе пока никого нет!")
+            await message.answer("👑 Админов пока нет!")
             return
-        
         text = "👑 **СОСТАВ СТАФФА:**\n\n"
-        for admin_id, rank, nickname, date in admins:
+        for uid, rank, nickname in admins:
             try:
-                user = await bot.get_chat(admin_id)
-                name = user.first_name or str(admin_id)
+                user = await bot.get_chat(uid)
+                name = user.first_name or str(uid)
                 if user.username:
                     name += f" (@{user.username})"
             except:
-                name = str(admin_id)
-            
+                name = str(uid)
             rank_name = get_rank_name(rank)
             nick = f" [{nickname}]" if nickname else ""
             text += f"{rank_name} — {name}{nick}\n"
-        
         await message.answer(text, parse_mode=ParseMode.MARKDOWN)
         return
     
     if text.startswith("!мут"):
         if not db.is_admin(user_id) or db.get_admin_rank(user_id) < 1:
-            await message.answer("❌ У тебя нет прав для мута!")
+            await message.answer("❌ Нет прав!")
             return
-        
         parts = text.split()
         if len(parts) < 2:
-            await message.answer("❌ Пример: !мут @user 1h")
+            await message.answer("❌ !мут @user 1h")
             return
-        
         target_username = parts[1]
         duration = parts[2] if len(parts) > 2 else "1h"
-        
         target_id = None
         for uid in db.get_users():
             try:
@@ -931,36 +624,29 @@ async def handle_messages(message: Message):
                     break
             except:
                 pass
-        
         if not target_id:
             await message.answer("❌ Пользователь не найден!")
             return
-        
         time_map = {"h": 1, "d": 24, "m": 1/60}
         unit = duration[-1]
         if unit not in time_map:
             await message.answer("❌ Используй: 1h, 2h, 1d, 30m")
             return
-        
         hours = int(duration[:-1]) * time_map[unit]
         until = datetime.now() + timedelta(hours=hours)
-        
         db.mute_user(target_id, chat_id, until.strftime('%Y-%m-%d %H:%M:%S'))
         await message.answer(f"🔇 {target_username} замьючен на {duration}!")
         return
     
     if text.startswith("!бан"):
         if not db.is_admin(user_id) or db.get_admin_rank(user_id) < 2:
-            await message.answer("❌ У тебя нет прав для бана!")
+            await message.answer("❌ Нет прав!")
             return
-        
         parts = text.split()
         if len(parts) < 2:
-            await message.answer("❌ Пример: !бан @user")
+            await message.answer("❌ !бан @user")
             return
-        
         target_username = parts[1]
-        
         target_id = None
         for uid in db.get_users():
             try:
@@ -970,72 +656,34 @@ async def handle_messages(message: Message):
                     break
             except:
                 pass
-        
         if not target_id:
             await message.answer("❌ Пользователь не найден!")
             return
-        
         db.ban_user(target_id, chat_id, user_id, "")
         await message.answer(f"🚫 {target_username} забанен!")
         return
     
-    if text.startswith("!разбан"):
-        if not db.is_admin(user_id) or db.get_admin_rank(user_id) < 3:
-            await message.answer("❌ У тебя нет прав для разбана!")
-            return
-        
-        parts = text.split()
-        if len(parts) < 2:
-            await message.answer("❌ Пример: !разбан @user")
-            return
-        
-        target_username = parts[1]
-        
-        target_id = None
-        for uid in db.get_users():
-            try:
-                u = await bot.get_chat(uid)
-                if u.username and u.username.lower() == target_username.replace("@", "").lower():
-                    target_id = uid
-                    break
-            except:
-                pass
-        
-        if not target_id:
-            await message.answer("❌ Пользователь не найден!")
-            return
-        
-        db.unban_user(target_id)
-        await message.answer(f"✅ {target_username} разбанен!")
-        return
-    
     if text.startswith("!кик"):
         if not db.is_admin(user_id):
-            await message.answer("❌ Ты не админ!")
+            await message.answer("❌ Нет прав!")
             return
-        
         parts = text.split()
         if len(parts) < 2:
-            await message.answer("❌ Пример: !кик @user")
+            await message.answer("❌ !кик @user")
             return
-        
-        target_username = parts[1]
-        await message.answer(f"👢 {target_username} кикнут!")
+        await message.answer(f"👢 {parts[1]} кикнут!")
         return
     
     if text.startswith("!варн"):
         if not db.is_admin(user_id) or db.get_admin_rank(user_id) < 2:
-            await message.answer("❌ У тебя нет прав для варна!")
+            await message.answer("❌ Нет прав!")
             return
-        
         parts = text.split()
         if len(parts) < 2:
-            await message.answer("❌ Пример: !варн @user [причина]")
+            await message.answer("❌ !варн @user [причина]")
             return
-        
         target_username = parts[1]
         reason = " ".join(parts[2:]) if len(parts) > 2 else "Без причины"
-        
         target_id = None
         for uid in db.get_users():
             try:
@@ -1045,67 +693,29 @@ async def handle_messages(message: Message):
                     break
             except:
                 pass
-        
         if not target_id:
             await message.answer("❌ Пользователь не найден!")
             return
-        
         warn_count = db.add_warn(target_id, chat_id, user_id, reason)
-        await message.answer(f"⚠️ {target_username} получил варн!\nПричина: {reason}\nВсего варнов: {warn_count}/3")
-        
+        await message.answer(f"⚠️ {target_username} получил варн!\nПричина: {reason}\nВсего: {warn_count}/3")
         if warn_count >= 3:
             db.ban_user(target_id, chat_id, user_id, "3 варна")
             await message.answer(f"🚫 {target_username} забанен за 3 варна!")
         return
     
-    if text.startswith("!снятьварн"):
-        if not db.is_admin(user_id) or db.get_admin_rank(user_id) < 3:
-            await message.answer("❌ У тебя нет прав!")
-            return
-        
-        parts = text.split()
-        if len(parts) < 2:
-            await message.answer("❌ Пример: !снятьварн @user")
-            return
-        
-        target_username = parts[1]
-        
-        target_id = None
-        for uid in db.get_users():
-            try:
-                u = await bot.get_chat(uid)
-                if u.username and u.username.lower() == target_username.replace("@", "").lower():
-                    target_id = uid
-                    break
-            except:
-                pass
-        
-        if not target_id:
-            await message.answer("❌ Пользователь не найден!")
-            return
-        
-        db.clear_warns(target_id)
-        await message.answer(f"✅ У {target_username} сняты все варны!")
-        return
-    
     if text.startswith("!добавить"):
         if not db.is_admin(user_id) or db.get_admin_rank(user_id) < 4:
-            await message.answer("❌ У тебя нет прав! Нужен ранг 4+")
+            await message.answer("❌ Нет прав! Нужен ранг 4+")
             return
-        
         parts = text.split()
         if len(parts) < 2:
-            await message.answer("❌ Пример: !добавить @user [ранг] [ник]")
+            await message.answer("❌ !добавить @user [ранг]")
             return
-        
         target_username = parts[1]
         rank = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 1
-        nickname = " ".join(parts[3:]) if len(parts) > 3 else None
-        
         if rank < 1 or rank > 5:
-            await message.answer("❌ Ранг должен быть от 1 до 5!")
+            await message.answer("❌ Ранг 1-5!")
             return
-        
         target_id = None
         for uid in db.get_users():
             try:
@@ -1115,27 +725,22 @@ async def handle_messages(message: Message):
                     break
             except:
                 pass
-        
         if not target_id:
             await message.answer("❌ Пользователь не найден!")
             return
-        
-        db.add_admin(target_id, rank, nickname, user_id)
-        await message.answer(f"✅ {target_username} добавлен в стафф!\nРанг: {get_rank_name(rank)}")
+        db.add_admin(target_id, rank)
+        await message.answer(f"✅ {target_username} добавлен! Ранг: {get_rank_name(rank)}")
         return
     
     if text.startswith("!удалить"):
         if not db.is_admin(user_id) or db.get_admin_rank(user_id) < 4:
-            await message.answer("❌ У тебя нет прав! Нужен ранг 4+")
+            await message.answer("❌ Нет прав! Нужен ранг 4+")
             return
-        
         parts = text.split()
         if len(parts) < 2:
-            await message.answer("❌ Пример: !удалить @user")
+            await message.answer("❌ !удалить @user")
             return
-        
         target_username = parts[1]
-        
         target_id = None
         for uid in db.get_users():
             try:
@@ -1145,53 +750,16 @@ async def handle_messages(message: Message):
                     break
             except:
                 pass
-        
         if not target_id:
             await message.answer("❌ Пользователь не найден!")
             return
-        
         db.remove_admin(target_id)
         await message.answer(f"✅ {target_username} удалён из стаффа!")
         return
-    
-    if text.startswith("!назначить"):
-        if not db.is_admin(user_id) or db.get_admin_rank(user_id) < 5:
-            await message.answer("❌ У тебя нет прав! Нужен ранг 5")
-            return
-        
-        parts = text.split()
-        if len(parts) < 3:
-            await message.answer("❌ Пример: !назначить @user 3")
-            return
-        
-        target_username = parts[1]
-        rank = int(parts[2]) if parts[2].isdigit() else 0
-        
-        if rank < 1 or rank > 5:
-            await message.answer("❌ Ранг должен быть от 1 до 5!")
-            return
-        
-        target_id = None
-        for uid in db.get_users():
-            try:
-                u = await bot.get_chat(uid)
-                if u.username and u.username.lower() == target_username.replace("@", "").lower():
-                    target_id = uid
-                    break
-            except:
-                pass
-        
-        if not target_id:
-            await message.answer("❌ Пользователь не найден!")
-            return
-        
-        db.set_admin_rank(target_id, rank)
-        await message.answer(f"✅ {target_username} назначен {get_rank_name(rank)}!")
-        return
 
-# ==================================================
+# ========================================
 # 7️⃣ КНОПКИ
-# ==================================================
+# ========================================
 
 @dp.callback_query()
 async def handle_callback(callback: CallbackQuery):
@@ -1209,32 +777,28 @@ async def handle_callback(callback: CallbackQuery):
         return
     
     if data == "balance":
-        balance = db.get_balance(user_id)
-        await callback.message.answer(f"💰 **Твой баланс:** {balance} 💎")
+        await callback.message.answer(f"💰 **Баланс:** {db.get_balance(user_id)} 💎")
         await callback.answer()
         return
     
     if data == "admins":
         admins = db.get_all_admins()
         if not admins:
-            await callback.message.answer("👑 В стаффе пока никого нет!")
+            await callback.message.answer("👑 Админов пока нет!")
             await callback.answer()
             return
-        
         text = "👑 **АДМИНИСТРАТОРЫ:**\n\n"
-        for admin_id, rank, nickname, date in admins:
+        for uid, rank, nickname in admins:
             try:
-                user = await bot.get_chat(admin_id)
-                name = user.first_name or str(admin_id)
+                user = await bot.get_chat(uid)
+                name = user.first_name or str(uid)
                 if user.username:
                     name += f" (@{user.username})"
             except:
-                name = str(admin_id)
-            
+                name = str(uid)
             rank_name = get_rank_name(rank)
             nick = f" [{nickname}]" if nickname else ""
             text += f"{rank_name} — {name}{nick}\n"
-        
         await callback.message.answer(text, parse_mode=ParseMode.MARKDOWN)
         await callback.answer()
         return
@@ -1245,16 +809,14 @@ async def handle_callback(callback: CallbackQuery):
             await callback.message.answer("Пока нет игроков 😔")
             await callback.answer()
             return
-        
         text = "🏆 **ТОП ИГРОКОВ:**\n\n"
-        for i, (user_id, balance, wins, losses, earned) in enumerate(top, 1):
+        for i, (uid, balance, wins, losses) in enumerate(top, 1):
             try:
-                user = await bot.get_chat(user_id)
-                name = user.first_name or str(user_id)
+                user = await bot.get_chat(uid)
+                name = user.first_name or str(uid)
             except:
-                name = str(user_id)
+                name = str(uid)
             text += f"{i}. {name} — {balance} 💎 (🏆{wins} ❌{losses})\n"
-        
         await callback.message.answer(text, parse_mode=ParseMode.MARKDOWN)
         await callback.answer()
         return
@@ -1263,10 +825,9 @@ async def handle_callback(callback: CallbackQuery):
         if db.get_daily_bonus(user_id):
             db.update_balance(user_id, 100)
             db.set_daily_bonus(user_id)
-            balance = db.get_balance(user_id)
-            await callback.message.answer(f"🎁 **БОНУС ПОЛУЧЕН!**\n+100 💎\n💰 Баланс: {balance} 💎")
+            await callback.message.answer(f"🎁 **+100 💎**\n💰 Баланс: {db.get_balance(user_id)}")
         else:
-            await callback.message.answer("❌ Ты уже получил бонус сегодня!\nПриходи завтра! 🔥")
+            await callback.message.answer("❌ Бонус уже получен сегодня!")
         await callback.answer()
         return
     
@@ -1275,135 +836,95 @@ async def handle_callback(callback: CallbackQuery):
             "⭐ **ПОДДЕРЖАТЬ БОТА** ⭐\n\n"
             "Напиши: .pay [сумма]\n"
             "Пример: .pay 50\n\n"
-            "Все средства идут на развитие бота!\n"
-            "Спасибо за поддержку! ❤️"
+            "Спасибо! ❤️"
         )
         await callback.answer()
         return
     
     if data == "help":
-        text = """
-📖 **ПОМОЩЬ ПО IRIS** 🌸
-
-🎮 **ИГРЫ:**
-!рулетка [ставка] — русская рулетка (х2)
-!кости [ставка] — бросок костей (х2)
-!битва @user [ставка] — PvP битва
-!кто гей — случайный выбор 🏳️‍🌈
-!кто — случайный человек
-!угадай [число] — угадай число (1-10)
-
-💕 **РП:**
-!обнять @user
-!поцеловать @user
-!дать пять @user
-!погладить @user
-!укусить @user
-
-💰 **ЭКОНОМИКА:**
-/balance — баланс
-/bonus — ежедневный бонус
-/top — топ игроков
-
-👑 **АДМИНЫ:**
-!админы — список админов
-!мут @user [время] — замутить
-!бан @user — забанить
-!кик @user — кикнуть
-
-🔥 **УДАЧИ!**
-        """
-        await callback.message.answer(text, parse_mode=ParseMode.MARKDOWN)
+        await callback.message.answer(
+            "📖 **ПОМОЩЬ**\n\n"
+            "🎮 **ИГРЫ:**\n"
+            "!рулетка [ставка]\n"
+            "!кости [ставка]\n"
+            "!битва @user [ставка]\n"
+            "!кто гей\n"
+            "!кто\n"
+            "!угадай [число]\n\n"
+            "💕 **РП:**\n"
+            "!обнять @user\n"
+            "!поцеловать @user\n"
+            "!дать пять @user\n\n"
+            "💰 **ЭКОНОМИКА:**\n"
+            "/balance\n"
+            "/bonus\n"
+            "/top\n\n"
+            "👑 **АДМИНЫ:**\n"
+            "!админы\n"
+            "!мут @user [время]\n"
+            "!бан @user\n"
+            "!кик @user\n"
+            "!варн @user [причина]\n"
+            "!добавить @user [ранг]\n"
+            "!удалить @user",
+            parse_mode=ParseMode.MARKDOWN
+        )
         await callback.answer()
         return
     
     if data == "game_roulette":
-        await callback.message.answer("🎲 **РУЛЕТКА:**\n\nИспользуй команду:\n!рулетка [ставка]\n\nПример: !рулетка 50")
+        await callback.message.answer("🎲 **РУЛЕТКА:**\n!рулетка [ставка]\nПример: !рулетка 50")
         await callback.answer()
         return
     
     if data == "game_dice":
-        await callback.message.answer("🎲 **КОСТИ:**\n\nИспользуй команду:\n!кости [ставка]\n\nПример: !кости 50")
+        await callback.message.answer("🎲 **КОСТИ:**\n!кости [ставка]\nПример: !кости 50")
         await callback.answer()
         return
     
     if data == "game_battle":
-        await callback.message.answer("⚔️ **БИТВА:**\n\nИспользуй команду:\n!битва @user [ставка]\n\nПример: !битва @user 50")
+        await callback.message.answer("⚔️ **БИТВА:**\n!битва @user [ставка]\nПример: !битва @user 50")
         await callback.answer()
         return
     
     if data == "game_guess":
-        await callback.message.answer("🎯 **УГАДАЙ ЧИСЛО:**\n\nИспользуй команду:\n!угадай [число]\n\nПример: !угадай 5")
+        await callback.message.answer("🎯 **УГАДАЙ:**\n!угадай [число]\nПример: !угадай 5")
         await callback.answer()
         return
 
-# ==================================================
-# 8️⃣ ПЛАТЁЖНАЯ СИСТЕМА (.pay)
-# ==================================================
+# ========================================
+# 8️⃣ ПЛАТЕЖИ
+# ========================================
 
-@dp.message(lambda message: message.text and message.text.startswith('.pay'))
-async def pay_command(message: Message):
+@dp.message(lambda m: m.text and m.text.startswith('.pay'))
+async def pay_cmd(message: Message):
     user_id = message.from_user.id
-    
     parts = message.text.split()
     if len(parts) < 2:
-        await message.answer("❌ Укажи сумму! Пример: .pay 10")
+        await message.answer("❌ .pay [сумма]")
         return
-    
     try:
         amount = int(parts[1])
-    except ValueError:
-        await message.answer("❌ Введи число! Пример: .pay 10")
+    except:
+        await message.answer("❌ Введи число!")
         return
-    
     if amount < 1:
-        await message.answer("❌ Минимальная сумма: 1💎")
+        await message.answer("❌ Минимум 1💎")
         return
-    
-    balance = db.get_balance(user_id)
-    if balance < amount:
-        await message.answer(f"❌ Недостаточно средств!\n💰 Твой баланс: {balance} 💎")
+    if db.get_balance(user_id) < amount:
+        await message.answer(f"❌ Не хватает! У тебя {db.get_balance(user_id)} 💎")
         return
-    
     db.update_balance(user_id, -amount)
-    db.cursor.execute("""
-        UPDATE users SET 
-            support_count = support_count + 1,
-            total_spent = total_spent + ?
-        WHERE user_id = ?
-    """, (amount, user_id))
-    db.conn.commit()
-    db.add_transaction(user_id, "support", -amount, f"Поддержка бота: {amount}💎")
-    
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton("⭐ Поддержать ещё", callback_data="support")]
-    ])
-    
-    await message.answer(
-        f"⭐ **СПАСИБО ЗА ПОДДЕРЖКУ!** ⭐\n\n"
-        f"💰 Снято: {amount} 💎\n"
-        f"💎 Остаток: {db.get_balance(user_id)}\n"
-        f"🤝 Ты помогаешь боту развиваться!\n\n"
-        f"🔥 Все средства идут на улучшение бота!",
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=keyboard
-    )
+    await message.answer(f"⭐ **СПАСИБО ЗА ПОДДЕРЖКУ!**\n💰 Снято: {amount} 💎\n💎 Остаток: {db.get_balance(user_id)}")
 
-# ==================================================
+# ========================================
 # 9️⃣ ЗАПУСК
-# ==================================================
+# ========================================
 
 async def main():
-    print("\n" + "="*60)
-    print("🌸 IRIS BOT ЗАПУЩЕН!")
-    print("👑 СИСТЕМА АДМИНОВ АКТИВНА!")
-    print("🎲 ИГРЫ И РП КОМАНДЫ РАБОТАЮТ!")
-    print("💰 ЭКОНОМИЧЕСКАЯ СИСТЕМА РАБОТАЕТ!")
-    print("📊 ТОПЫ И СТАТИСТИКА РАБОТАЮТ!")
-    print("="*60 + "\n")
-    
-    logger.info("Бот запущен!")
-    
+    print("\n🌸 IRIS BOT ЗАПУЩЕН!")
+    print("👑 ВСЕ КОМАНДЫ АКТИВНЫ!")
+    print("="*50)
     try:
         await dp.start_polling(bot)
     except Exception as e:
