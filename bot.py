@@ -9,16 +9,20 @@ from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, C
 from aiogram.enums import ParseMode
 
 # ========================================
-# 1️⃣ НАСТРОЙКИ
+# 1️⃣ НАСТРОЙКИ ДЛЯ OPENGRAM (TELESRV)
 # ========================================
 
 BOT_TOKEN = "1780244667:ZRL7qnnHfc1iaIonCOZPsnN3dBIwbfeaBgn"
+API_URL = "http://31.76.20.193:8081/bot"  # ← ДЛЯ OPENGRAM
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-bot = Bot(token=BOT_TOKEN)
+# ПОДКЛЮЧЕНИЕ ЧЕРЕЗ TELESRV API
+bot = Bot(token=BOT_TOKEN, base=API_URL)
 dp = Dispatcher()
+
+print("✅ Бот подключен через OpenGram (telesrv) API!")
 
 # ========================================
 # 2️⃣ БАЗА ДАННЫХ
@@ -31,6 +35,7 @@ class Database:
         self.create_tables()
 
     def create_tables(self):
+        # Пользователи
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
@@ -41,12 +46,11 @@ class Database:
                 last_daily TEXT,
                 referral_code TEXT UNIQUE,
                 referral_count INTEGER DEFAULT 0,
-                total_earned INTEGER DEFAULT 0,
-                support_count INTEGER DEFAULT 0,
                 is_banned INTEGER DEFAULT 0
             )
         """)
         
+        # Администраторы
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS admins (
                 user_id INTEGER PRIMARY KEY,
@@ -56,6 +60,7 @@ class Database:
             )
         """)
         
+        # Муты
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS mutes (
                 user_id INTEGER,
@@ -65,6 +70,7 @@ class Database:
             )
         """)
         
+        # Баны
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS bans (
                 user_id INTEGER PRIMARY KEY,
@@ -74,6 +80,7 @@ class Database:
             )
         """)
         
+        # Варны
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS warns (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -120,21 +127,6 @@ class Database:
         """, (limit,))
         return self.cursor.fetchall()
 
-    def get_referral_code(self, user_id):
-        user = self.get_user(user_id)
-        return user[6] if user else None
-
-    def add_referral(self, referrer_id, referred_id):
-        self.cursor.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id = ?", (referrer_id,))
-        count = self.cursor.fetchone()[0]
-        if count < 10:
-            self.update_balance(referrer_id, 50)
-            self.cursor.execute("""
-                UPDATE users SET referral_count = referral_count + 1
-                WHERE user_id = ?
-            """, (referrer_id,))
-            self.conn.commit()
-
     def get_daily_bonus(self, user_id):
         user = self.get_user(user_id)
         if user:
@@ -173,10 +165,6 @@ class Database:
 
     def remove_admin(self, user_id):
         self.cursor.execute("DELETE FROM admins WHERE user_id = ?", (user_id,))
-        self.conn.commit()
-
-    def set_admin_rank(self, user_id, rank):
-        self.cursor.execute("UPDATE admins SET rank = ? WHERE user_id = ?", (rank, user_id))
         self.conn.commit()
 
     def mute_user(self, user_id, chat_id, until):
@@ -265,15 +253,6 @@ def main_menu():
         [InlineKeyboardButton("📖 Помощь", callback_data="help")]
     ])
 
-def games_menu():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton("🎲 Рулетка", callback_data="game_roulette"),
-         InlineKeyboardButton("🎲 Кости", callback_data="game_dice")],
-        [InlineKeyboardButton("⚔️ Битва", callback_data="game_battle"),
-         InlineKeyboardButton("🎯 Угадай", callback_data="game_guess")],
-        [InlineKeyboardButton("🔙 Назад", callback_data="back")]
-    ])
-
 # ========================================
 # 5️⃣ КОМАНДЫ
 # ========================================
@@ -281,39 +260,36 @@ def games_menu():
 @dp.message(Command("start"))
 async def start_cmd(message: Message):
     user_id = message.from_user.id
-    
-    # Проверка реферала
-    referrer_id = None
-    if " " in message.text:
-        parts = message.text.split()
-        if len(parts) > 1:
-            code = parts[1]
-            db.cursor.execute("SELECT user_id FROM users WHERE referral_code = ?", (code,))
-            result = db.cursor.fetchone()
-            if result:
-                referrer_id = result[0]
-    
     db.register_user(user_id)
-    if referrer_id:
-        db.add_referral(referrer_id, user_id)
     
     await message.answer(
-        f"🌸 **IRIS BOT**\n\n"
+        f"🌸 **IRIS BOT (OpenGram)**\n\n"
         f"Привет, {message.from_user.first_name}!\n"
         f"💰 Баланс: {db.get_balance(user_id)} 💎\n\n"
-        f"🎮 /games — список игр\n"
-        f"💰 /balance — баланс\n"
-        f"👑 /admins — админы\n"
-        f"📊 /top — топ игроков\n"
-        f"🎁 /bonus — бонус\n"
-        f"📖 /help — помощь",
+        f"🎮 **ИГРЫ:**\n"
+        f"!рулетка [ставка]\n"
+        f"!кости [ставка]\n"
+        f"!битва @user [ставка]\n"
+        f"!кто гей\n"
+        f"!кто\n"
+        f"!угадай [число]\n\n"
+        f"💕 **РП:**\n"
+        f"!обнять @user\n"
+        f"!поцеловать @user\n"
+        f"!дать пять @user\n"
+        f"!погладить @user\n"
+        f"!укусить @user\n\n"
+        f"👑 **АДМИНЫ:**\n"
+        f"!админы\n"
+        f"!мут @user [время]\n"
+        f"!бан @user\n"
+        f"!кик @user\n"
+        f"!варн @user [причина]\n"
+        f"!добавить @user [ранг]\n"
+        f"!удалить @user",
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=main_menu()
     )
-
-@dp.message(Command("games"))
-async def games_cmd(message: Message):
-    await message.answer("🎮 **ВЫБЕРИ ИГРУ:**", parse_mode=ParseMode.MARKDOWN, reply_markup=games_menu())
 
 @dp.message(Command("balance"))
 async def balance_cmd(message: Message):
@@ -368,7 +344,7 @@ async def admins_cmd(message: Message):
 @dp.message(Command("help"))
 async def help_cmd(message: Message):
     await message.answer(
-        "📖 **ПОМОЩЬ**\n\n"
+        "📖 **ВСЕ КОМАНДЫ**\n\n"
         "🎮 **ИГРЫ:**\n"
         "!рулетка [ставка]\n"
         "!кости [ставка]\n"
@@ -387,12 +363,12 @@ async def help_cmd(message: Message):
         "/bonus\n"
         "/top\n\n"
         "👑 **АДМИНЫ:**\n"
-        "!админы\n"
-        "!мут @user [время]\n"
+        "!админы — список\n"
+        "!мут @user [время] — 1h, 1d, 30m\n"
         "!бан @user\n"
         "!кик @user\n"
         "!варн @user [причина]\n"
-        "!добавить @user [ранг]\n"
+        "!добавить @user [ранг] — 1-5\n"
         "!удалить @user",
         parse_mode=ParseMode.MARKDOWN
     )
@@ -420,11 +396,11 @@ async def handle_messages(message: Message):
     
     db.register_user(user_id)
     
-    # ===== РУЛЕТКА =====
+    # ===== ИГРЫ =====
     if text.startswith("!рулетка"):
         parts = text.split()
         if len(parts) < 2:
-            await message.answer("❌ Укажи ставку! !рулетка 50")
+            await message.answer("❌ !рулетка 50")
             return
         try:
             bet = int(parts[1])
@@ -432,24 +408,23 @@ async def handle_messages(message: Message):
             await message.answer("❌ Введи число!")
             return
         if bet < 1:
-            await message.answer("❌ Ставка должна быть > 0!")
+            await message.answer("❌ Ставка > 0!")
             return
         if db.get_balance(user_id) < bet:
             await message.answer(f"❌ Не хватает! У тебя {db.get_balance(user_id)} 💎")
             return
         if random.random() < 0.5:
             db.update_balance(user_id, bet)
-            await message.answer(f"🎉 ВЫИГРАЛ! +{bet} 💎\n💰 Баланс: {db.get_balance(user_id)}")
+            await message.answer(f"🎉 ВЫИГРАЛ! +{bet} 💎")
         else:
             db.update_balance(user_id, -bet)
-            await message.answer(f"💀 ПРОИГРАЛ! -{bet} 💎\n💰 Баланс: {db.get_balance(user_id)}")
+            await message.answer(f"💀 ПРОИГРАЛ! -{bet} 💎")
         return
     
-    # ===== КОСТИ =====
     if text.startswith("!кости"):
         parts = text.split()
         if len(parts) < 2:
-            await message.answer("❌ Укажи ставку! !кости 50")
+            await message.answer("❌ !кости 50")
             return
         try:
             bet = int(parts[1])
@@ -468,59 +443,6 @@ async def handle_messages(message: Message):
             await message.answer(f"🎲 ВЫПАЛО: {dice} 💀 ПРОИГРАЛ! -{bet} 💎")
         return
     
-    # ===== УГАДАЙ =====
-    if text.startswith("!угадай"):
-        parts = text.split()
-        if len(parts) < 2:
-            await message.answer("❌ Угадай число от 1 до 10! !угадай 5")
-            return
-        try:
-            guess = int(parts[1])
-        except:
-            await message.answer("❌ Введи число!")
-            return
-        if guess < 1 or guess > 10:
-            await message.answer("❌ Число от 1 до 10!")
-            return
-        target = random.randint(1, 10)
-        if guess == target:
-            db.update_balance(user_id, 50)
-            await message.answer(f"🎉 ПРАВИЛЬНО! Было {target}! +50 💎")
-        else:
-            await message.answer(f"❌ НЕ УГАДАЛ! Было {target}!")
-        return
-    
-    # ===== КТО ГЕЙ =====
-    if text == "!кто гей":
-        users = db.get_users()
-        if not users:
-            await message.answer("😅 В чате никого нет!")
-            return
-        target = random.choice(users)
-        try:
-            user = await bot.get_chat(target)
-            name = user.first_name or str(target)
-        except:
-            name = str(target)
-        await message.answer(f"🏳️‍🌈 СЕГОДНЯШНИЙ ГЕЙ: {name}!")
-        return
-    
-    # ===== КТО =====
-    if text == "!кто":
-        users = db.get_users()
-        if not users:
-            await message.answer("😅 В чате никого нет!")
-            return
-        target = random.choice(users)
-        try:
-            user = await bot.get_chat(target)
-            name = user.first_name or str(target)
-        except:
-            name = str(target)
-        await message.answer(f"🎯 СЛУЧАЙНЫЙ ВЫБОР: {name}!")
-        return
-    
-    # ===== БИТВА =====
     if text.startswith("!битва"):
         parts = text.split()
         if len(parts) < 3:
@@ -551,20 +473,69 @@ async def handle_messages(message: Message):
             await message.answer("❌ Нельзя биться с собой!")
             return
         if db.get_balance(target_id) < bet:
-            await message.answer("❌ У противника не хватает средств!")
+            await message.answer("❌ У противника не хватает!")
             return
         winner = random.choice([user_id, target_id])
         if winner == user_id:
             db.update_balance(user_id, bet)
             db.update_balance(target_id, -bet)
-            await message.answer(f"⚔️ {message.from_user.first_name} ПОБЕДИЛ! +{bet} 💎")
+            await message.answer(f"⚔️ ПОБЕДА! +{bet} 💎")
         else:
             db.update_balance(user_id, -bet)
             db.update_balance(target_id, bet)
-            await message.answer(f"⚔️ {target_username} ПОБЕДИЛ! -{bet} 💎")
+            await message.answer(f"⚔️ ПОРАЖЕНИЕ! -{bet} 💎")
         return
     
-    # ===== РП КОМАНДЫ =====
+    if text == "!кто гей":
+        users = db.get_users()
+        if not users:
+            await message.answer("😅 В чате никого нет!")
+            return
+        target = random.choice(users)
+        try:
+            user = await bot.get_chat(target)
+            name = user.first_name or str(target)
+        except:
+            name = str(target)
+        await message.answer(f"🏳️‍🌈 СЕГОДНЯШНИЙ ГЕЙ: {name}!")
+        return
+    
+    if text == "!кто":
+        users = db.get_users()
+        if not users:
+            await message.answer("😅 В чате никого нет!")
+            return
+        target = random.choice(users)
+        try:
+            user = await bot.get_chat(target)
+            name = user.first_name or str(target)
+        except:
+            name = str(target)
+        await message.answer(f"🎯 СЛУЧАЙНЫЙ ВЫБОР: {name}!")
+        return
+    
+    if text.startswith("!угадай"):
+        parts = text.split()
+        if len(parts) < 2:
+            await message.answer("❌ !угадай 5")
+            return
+        try:
+            guess = int(parts[1])
+        except:
+            await message.answer("❌ Введи число!")
+            return
+        if guess < 1 or guess > 10:
+            await message.answer("❌ Число 1-10!")
+            return
+        target = random.randint(1, 10)
+        if guess == target:
+            db.update_balance(user_id, 50)
+            await message.answer(f"🎉 ПРАВИЛЬНО! Было {target}! +50 💎")
+        else:
+            await message.answer(f"❌ НЕ УГАДАЛ! Было {target}!")
+        return
+    
+    # ===== РП =====
     rp = {
         "!обнять": "🤗 обнял(а)",
         "!поцеловать": "💋 поцеловал(а)",
@@ -583,7 +554,9 @@ async def handle_messages(message: Message):
             await message.answer(f"💕 {message.from_user.first_name} {action} {target}! ❤️")
             return
     
-    # ===== АДМИН КОМАНДЫ =====
+    # ========================================
+    # 7️⃣ АДМИН КОМАНДЫ
+    # ========================================
     
     if text == "!админы" or text == "!стафф":
         admins = db.get_all_admins()
@@ -607,7 +580,7 @@ async def handle_messages(message: Message):
     
     if text.startswith("!мут"):
         if not db.is_admin(user_id) or db.get_admin_rank(user_id) < 1:
-            await message.answer("❌ Нет прав!")
+            await message.answer("❌ Нет прав! Нужен ранг 1+")
             return
         parts = text.split()
         if len(parts) < 2:
@@ -640,7 +613,7 @@ async def handle_messages(message: Message):
     
     if text.startswith("!бан"):
         if not db.is_admin(user_id) or db.get_admin_rank(user_id) < 2:
-            await message.answer("❌ Нет прав!")
+            await message.answer("❌ Нет прав! Нужен ранг 2+")
             return
         parts = text.split()
         if len(parts) < 2:
@@ -663,20 +636,58 @@ async def handle_messages(message: Message):
         await message.answer(f"🚫 {target_username} забанен!")
         return
     
+    if text.startswith("!разбан"):
+        if not db.is_admin(user_id) or db.get_admin_rank(user_id) < 3:
+            await message.answer("❌ Нет прав! Нужен ранг 3+")
+            return
+        parts = text.split()
+        if len(parts) < 2:
+            await message.answer("❌ !разбан @user")
+            return
+        target_username = parts[1]
+        target_id = None
+        for uid in db.get_users():
+            try:
+                u = await bot.get_chat(uid)
+                if u.username and u.username.lower() == target_username.replace("@", "").lower():
+                    target_id = uid
+                    break
+            except:
+                pass
+        if not target_id:
+            await message.answer("❌ Пользователь не найден!")
+            return
+        db.unban_user(target_id)
+        await message.answer(f"✅ {target_username} разбанен!")
+        return
+    
     if text.startswith("!кик"):
-        if not db.is_admin(user_id):
-            await message.answer("❌ Нет прав!")
+        if not db.is_admin(user_id) or db.get_admin_rank(user_id) < 1:
+            await message.answer("❌ Нет прав! Нужен ранг 1+")
             return
         parts = text.split()
         if len(parts) < 2:
             await message.answer("❌ !кик @user")
             return
-        await message.answer(f"👢 {parts[1]} кикнут!")
+        target_username = parts[1]
+        target_id = None
+        for uid in db.get_users():
+            try:
+                u = await bot.get_chat(uid)
+                if u.username and u.username.lower() == target_username.replace("@", "").lower():
+                    target_id = uid
+                    break
+            except:
+                pass
+        if not target_id:
+            await message.answer("❌ Пользователь не найден!")
+            return
+        await message.answer(f"👢 {target_username} кикнут!")
         return
     
     if text.startswith("!варн"):
         if not db.is_admin(user_id) or db.get_admin_rank(user_id) < 2:
-            await message.answer("❌ Нет прав!")
+            await message.answer("❌ Нет прав! Нужен ранг 2+")
             return
         parts = text.split()
         if len(parts) < 2:
@@ -701,6 +712,31 @@ async def handle_messages(message: Message):
         if warn_count >= 3:
             db.ban_user(target_id, chat_id, user_id, "3 варна")
             await message.answer(f"🚫 {target_username} забанен за 3 варна!")
+        return
+    
+    if text.startswith("!снятьварн"):
+        if not db.is_admin(user_id) or db.get_admin_rank(user_id) < 3:
+            await message.answer("❌ Нет прав! Нужен ранг 3+")
+            return
+        parts = text.split()
+        if len(parts) < 2:
+            await message.answer("❌ !снятьварн @user")
+            return
+        target_username = parts[1]
+        target_id = None
+        for uid in db.get_users():
+            try:
+                u = await bot.get_chat(uid)
+                if u.username and u.username.lower() == target_username.replace("@", "").lower():
+                    target_id = uid
+                    break
+            except:
+                pass
+        if not target_id:
+            await message.answer("❌ Пользователь не найден!")
+            return
+        db.clear_warns(target_id)
+        await message.answer(f"✅ У {target_username} сняты все варны!")
         return
     
     if text.startswith("!добавить"):
@@ -758,7 +794,7 @@ async def handle_messages(message: Message):
         return
 
 # ========================================
-# 7️⃣ КНОПКИ
+# 8️⃣ КНОПКИ
 # ========================================
 
 @dp.callback_query()
@@ -766,13 +802,16 @@ async def handle_callback(callback: CallbackQuery):
     user_id = callback.from_user.id
     data = callback.data
     
-    if data == "back":
-        await callback.message.edit_text("🏠 **ГЛАВНОЕ МЕНЮ:**", parse_mode=ParseMode.MARKDOWN, reply_markup=main_menu())
-        await callback.answer()
-        return
-    
     if data == "games":
-        await callback.message.edit_text("🎮 **ВЫБЕРИ ИГРУ:**", parse_mode=ParseMode.MARKDOWN, reply_markup=games_menu())
+        await callback.message.answer(
+            "🎲 **ИГРЫ:**\n\n"
+            "!рулетка [ставка]\n"
+            "!кости [ставка]\n"
+            "!битва @user [ставка]\n"
+            "!кто гей\n"
+            "!кто\n"
+            "!угадай [число]"
+        )
         await callback.answer()
         return
     
@@ -842,58 +881,12 @@ async def handle_callback(callback: CallbackQuery):
         return
     
     if data == "help":
-        await callback.message.answer(
-            "📖 **ПОМОЩЬ**\n\n"
-            "🎮 **ИГРЫ:**\n"
-            "!рулетка [ставка]\n"
-            "!кости [ставка]\n"
-            "!битва @user [ставка]\n"
-            "!кто гей\n"
-            "!кто\n"
-            "!угадай [число]\n\n"
-            "💕 **РП:**\n"
-            "!обнять @user\n"
-            "!поцеловать @user\n"
-            "!дать пять @user\n\n"
-            "💰 **ЭКОНОМИКА:**\n"
-            "/balance\n"
-            "/bonus\n"
-            "/top\n\n"
-            "👑 **АДМИНЫ:**\n"
-            "!админы\n"
-            "!мут @user [время]\n"
-            "!бан @user\n"
-            "!кик @user\n"
-            "!варн @user [причина]\n"
-            "!добавить @user [ранг]\n"
-            "!удалить @user",
-            parse_mode=ParseMode.MARKDOWN
-        )
-        await callback.answer()
-        return
-    
-    if data == "game_roulette":
-        await callback.message.answer("🎲 **РУЛЕТКА:**\n!рулетка [ставка]\nПример: !рулетка 50")
-        await callback.answer()
-        return
-    
-    if data == "game_dice":
-        await callback.message.answer("🎲 **КОСТИ:**\n!кости [ставка]\nПример: !кости 50")
-        await callback.answer()
-        return
-    
-    if data == "game_battle":
-        await callback.message.answer("⚔️ **БИТВА:**\n!битва @user [ставка]\nПример: !битва @user 50")
-        await callback.answer()
-        return
-    
-    if data == "game_guess":
-        await callback.message.answer("🎯 **УГАДАЙ:**\n!угадай [число]\nПример: !угадай 5")
+        await help_cmd(callback.message)
         await callback.answer()
         return
 
 # ========================================
-# 8️⃣ ПЛАТЕЖИ
+# 9️⃣ ПЛАТЕЖИ
 # ========================================
 
 @dp.message(lambda m: m.text and m.text.startswith('.pay'))
@@ -918,13 +911,16 @@ async def pay_cmd(message: Message):
     await message.answer(f"⭐ **СПАСИБО ЗА ПОДДЕРЖКУ!**\n💰 Снято: {amount} 💎\n💎 Остаток: {db.get_balance(user_id)}")
 
 # ========================================
-# 9️⃣ ЗАПУСК
+# 🔟 ЗАПУСК
 # ========================================
 
 async def main():
-    print("\n🌸 IRIS BOT ЗАПУЩЕН!")
-    print("👑 ВСЕ КОМАНДЫ АКТИВНЫ!")
+    print("\n🌸 IRIS BOT (OpenGram) ЗАПУЩЕН!")
+    print("🎲 ИГРЫ АКТИВНЫ!")
+    print("💕 РП КОМАНДЫ РАБОТАЮТ!")
+    print("👑 АДМИН-ПАНЕЛЬ АКТИВНА!")
     print("="*50)
+    
     try:
         await dp.start_polling(bot)
     except Exception as e:
